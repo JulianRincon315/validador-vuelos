@@ -37,6 +37,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
           WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
+          DATADOME_COOKIE: ${{ secrets.DATADOME_COOKIE }}
         run: |
           python tracker.py
 
