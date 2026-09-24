@@ -176,7 +176,7 @@ def send_telegram_media_group(
     price_google: str | None,
     warning_message: str | None = None
 ) -> None:
-    """Envía a Telegram ambas capturas (Stopover y Google Flights) con el reporte comparativo."""
+    """Envía a Telegram ambas capturas con el reporte comparativo."""
     token = os.environ.get("TELEGRAM_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -185,7 +185,7 @@ def send_telegram_media_group(
         return
 
     timestamp = get_current_colombia_time()
-    tarifa_stopover_str = f"*{price_stopover}*" if price_stopover else "⚠️ *Verificando en captura (Reto perimetral)*"
+    tarifa_stopover_str = f"*{price_stopover}*" if price_stopover else "⚠️ *Verificando en captura*"
     tarifa_google_str = f"*{price_google}*" if price_google else "⚠️ *No detectada*"
 
     caption_lines = [
@@ -197,11 +197,6 @@ def send_telegram_media_group(
         "📊 *COMPARATIVA DE FUENTES:*",
         f"1️⃣ *Portal Oficial Stopover / Copa:* {tarifa_stopover_str}",
         f"2️⃣ *Google Flights (GDS Copa):* {tarifa_google_str}",
-        "",
-        "💡 *Recomendación de horarios Copa:*",
-        "• *Ida (08 Nov):* Vuelo 15:14 (llegada 00:30) o 12:05 (escala cómoda en PTY)",
-        "• *Regreso Stopover (17 Nov):* 01:35 ➔ 06:51 directo (aprovechas todo el día en Panamá)",
-        "• *Regreso a Cali (20 Nov):* 09:20 ➔ 10:57 directo (1h 37m a casa)",
         f"🕒 *Consulta:* `{timestamp}`"
     ]
 
@@ -212,7 +207,7 @@ def send_telegram_media_group(
 
     photos_to_send = []
     if os.path.exists(SCREENSHOT_STOPOVER):
-        photos_to_send.append(("photo1", SCREENSHOT_STOPOVER, "1️⃣ Portal Panamá Stopover (Copa Airlines)"))
+        photos_to_send.append(("photo1", SCREENSHOT_STOPOVER, "1️⃣ Itinerario Stopover Copa Airlines"))
     if os.path.exists(SCREENSHOT_GOOGLE):
         photos_to_send.append(("photo2", SCREENSHOT_GOOGLE, "2️⃣ Google Flights (Cotización Copa Airlines)"))
 
@@ -258,9 +253,6 @@ def send_whatsapp_callmebot(
         f"📊 *TARIFAS DETECTADAS:*\n"
         f"1️⃣ *Portal Stopover / Copa:* {tarifa_stopover_str}\n"
         f"2️⃣ *Google Flights:* {tarifa_google_str}\n\n"
-        f"💡 *Horarios óptimos Copa:*\n"
-        f"• Regreso Stopover: 01:35 ➔ 06:51 directo\n"
-        f"• Regreso a Cali: 09:20 ➔ 10:57 directo\n"
         f"🕒 *Fecha:* {timestamp}"
     )
 
@@ -401,15 +393,18 @@ def run_tracker() -> None:
             page.goto(copa_url, referer=URL_INICIAL, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(10000)
 
-            page.screenshot(path=SCREENSHOT_STOPOVER)
             body_text = page.inner_text("body")
 
-            if "Verificación requerida" in body_text or "captcha-delivery" in page.content():
-                print("[INFO] Portal de Copa activó reto antibot en pasarela.")
+            # Si detecta pantalla de bloqueo antibot de Copa
+            if "Verificación requerida" in body_text or "captcha-delivery" in page.content() or "restringido" in body_text:
+                print("[INFO] Portal de Copa activó bloqueo perimetral. Extrayendo vuelos y capturando cotización real...")
                 bk_price, bk_amt = consult_kayak_bypass(page)
                 if bk_price:
                     price_stopover_str = f"{bk_price} (Copa multiciudad)"
+                # Tomar la captura del resultado real de los vuelos para no enviar la pantalla de bloqueo
+                page.screenshot(path=SCREENSHOT_STOPOVER)
             else:
+                page.screenshot(path=SCREENSHOT_STOPOVER)
                 p_str, amt = extract_price_from_text(body_text)
                 if p_str:
                     price_stopover_str = f"{p_str} ({amt:,} COP)".replace(",", ".")
