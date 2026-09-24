@@ -57,8 +57,8 @@ def parse_cop_amount(text_value: str) -> int:
 def extract_price_from_text(page_text: str) -> tuple[str | None, int]:
     """Busca patrones de moneda tipo COP o $ superior al umbral."""
     patterns = [
-        r"(?:COP|\$)\s*([\d\.\,]{6,15})",
         r"([\d\.\,]{6,15})\s*(?:COP|pesos)",
+        r"(?:COP|\$)\s*([\d\.\,]{6,15})",
     ]
 
     valid_candidates: list[tuple[str, int]] = []
@@ -144,33 +144,6 @@ def consult_google_flights(page: Page) -> tuple[str | None, int]:
     return None, 0
 
 
-def consult_kayak_bypass(page: Page) -> tuple[str | None, int]:
-    """Consulta el desglose multiciudad de respaldo si el portal oficial se bloquea por captcha."""
-    fallback_url = (
-        f"https://www.kayak.com.co/flights/"
-        f"{ORIGEN_IATA}-{DESTINO_IATA}/{FECHA_IDA}/"
-        f"{DESTINO_IATA}-PTY/{FECHA_REGRESO_T1}/"
-        f"PTY-{ORIGEN_IATA}/{FECHA_REGRESO_T2}?sort=price_a"
-    )
-    print(f"[BYPASS BACKUP] Consultando: {fallback_url}")
-    try:
-        page.goto(fallback_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(8000)
-        body_text = page.inner_text("body")
-        raw_prices = re.findall(r'\$\s*([\d\.]+)', body_text)
-        candidates = []
-        for p in raw_prices:
-            amt = int(p.replace(".", ""))
-            if amt >= UMBRAL_MINIMO_COP:
-                candidates.append((f"${p} COP", amt))
-        if candidates:
-            candidates.sort(key=lambda x: x[1])
-            return candidates[0]
-    except Exception as e:
-        print(f"[BYPASS ERROR] {e}")
-    return None, 0
-
-
 def send_telegram_media_group(
     price_stopover: str | None,
     price_google: str | None,
@@ -207,7 +180,7 @@ def send_telegram_media_group(
 
     photos_to_send = []
     if os.path.exists(SCREENSHOT_STOPOVER):
-        photos_to_send.append(("photo1", SCREENSHOT_STOPOVER, "1️⃣ Itinerario Stopover Copa Airlines"))
+        photos_to_send.append(("photo1", SCREENSHOT_STOPOVER, "1️⃣ Portal Panamá Stopover (Copa Airlines)"))
     if os.path.exists(SCREENSHOT_GOOGLE):
         photos_to_send.append(("photo2", SCREENSHOT_GOOGLE, "2️⃣ Google Flights (Cotización Copa Airlines)"))
 
@@ -272,7 +245,7 @@ def send_whatsapp_callmebot(
 
 
 def configure_stealth_context(browser: Browser) -> BrowserContext:
-    """Configura un contexto Playwright con evasión anti-bot."""
+    """Configura un contexto Playwright con evasión anti-bot y soporte de cookie autorizada."""
     context = browser.new_context(
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         viewport={"width": 1366, "height": 768},
@@ -284,12 +257,24 @@ def configure_stealth_context(browser: Browser) -> BrowserContext:
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         window.navigator.chrome = { runtime: {} };
     """)
+
+    # Si el usuario configuró su cookie autorizada de DataDome, inyectarla
+    datadome_cookie = os.environ.get("DATADOME_COOKIE")
+    if datadome_cookie:
+        print("[INFO] Inyectando cookie autorizada de DataDome para pase VIP...")
+        context.add_cookies([{
+            "name": "datadome",
+            "value": datadome_cookie.strip(),
+            "domain": ".copaair.com",
+            "path": "/"
+        }])
+
     return context
 
 
 def run_tracker() -> None:
     print("=" * 70)
-    print("INICIANDO TRACKER DUAL: PANAMÁ STOPOVER + GOOGLE FLIGHTS")
+    print("INICIANDO TRACKER OFICIAL: PANAMÁ STOPOVER + GOOGLE FLIGHTS")
     print(f"Ruta: {ORIGEN_IATA} ➔ {DESTINO_IATA} con Stopover en PTY")
     print("=" * 70)
 
@@ -321,93 +306,25 @@ def run_tracker() -> None:
         # 2. CONSULTAR PORTAL OFICIAL PANAMA STOPOVER / COPA
         print("[2/2] Iniciando flujo en portal oficial https://panama-stopover.com/es/...")
         try:
-            page.add_init_script("""
-                window._openedStopoverUrl = null;
-                window.open = function(url, target, features) {
-                    window._openedStopoverUrl = url;
-                    return null;
-                };
-            """)
-            page.goto(URL_INICIAL, wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(1500)
+            copa_url = build_copa_multicity_url()
+            print(f"[COPA] Navegando directamente a la pasarela oficial multiciudad: {copa_url}")
+            page.goto(copa_url, referer=URL_INICIAL, wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(8000)
 
-            # Cerrar cookies
-            try:
-                close_btn = page.locator("button[data-dialog-close], button[aria-label*='cerrar']")
-                if close_btn.count() > 0 and close_btn.first.is_visible():
-                    close_btn.first.click()
-                    page.wait_for_timeout(500)
-            except Exception:
-                pass
-
-            # Llenar widget
-            try:
-                origin_input = page.locator("#stopover-booking-form-mini-origin")
-                origin_input.click()
-                origin_input.fill(ORIGEN_IATA)
-                page.wait_for_timeout(600)
-                page.locator("[data-combobox-item], [role='option']").first.click()
-
-                dest_input = page.locator("#stopover-booking-form-mini-destination")
-                dest_input.click()
-                dest_input.fill(DESTINO_IATA)
-                page.wait_for_timeout(600)
-                page.locator("[data-combobox-item], [role='option']").first.click()
-
-                dates_btn = page.locator("button[data-mini-tab-step='dates'], #stopover-booking-form-mini-travel-dates")
-                dates_btn.first.click()
-                page.wait_for_timeout(600)
-
-                next_month_btn = page.locator("button:has(svg):right-of(:text('Octubre de 2026'))").first
-                if not next_month_btn.is_visible():
-                    next_month_btn = page.locator("button[aria-label*='siguiente']").first
-                if next_month_btn.is_visible():
-                    next_month_btn.click()
-                    page.wait_for_timeout(500)
-
-                page.locator("[data-value='2026-11-08']").first.click()
-                page.wait_for_timeout(300)
-                page.locator("[data-value='2026-11-17']").first.click()
-                page.wait_for_timeout(300)
-
-                regreso_opt = page.locator("button:has-text('regreso'), label:has-text('regreso'), [data-value='return']")
-                if regreso_opt.count() > 0:
-                    regreso_opt.first.click()
-
-                listo_btn = page.locator("button:has-text('Listo')")
-                if listo_btn.count() > 0:
-                    listo_btn.first.click()
-                    page.wait_for_timeout(500)
-
-                search_btn = page.locator("button[data-mini-tab-step='search']")
-                search_btn.first.click()
-                page.wait_for_timeout(3000)
-
-                copa_url = page.evaluate("window._openedStopoverUrl")
-            except Exception:
-                copa_url = None
-
-            if not copa_url:
-                copa_url = build_copa_multicity_url()
-
-            page.goto(copa_url, referer=URL_INICIAL, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(10000)
-
+            # Tomar captura directamente de la pantalla oficial
+            page.screenshot(path=SCREENSHOT_STOPOVER)
             body_text = page.inner_text("body")
 
-            # Si detecta pantalla de bloqueo antibot de Copa
-            if "Verificación requerida" in body_text or "captcha-delivery" in page.content() or "restringido" in body_text:
-                print("[INFO] Portal de Copa activó bloqueo perimetral. Extrayendo vuelos y capturando cotización real...")
-                bk_price, bk_amt = consult_kayak_bypass(page)
-                if bk_price:
-                    price_stopover_str = f"{bk_price} (Copa multiciudad)"
-                # Tomar la captura del resultado real de los vuelos para no enviar la pantalla de bloqueo
-                page.screenshot(path=SCREENSHOT_STOPOVER)
+            # Analizar el DOM de la página oficial de Copa
+            p_str, amt = extract_price_from_text(body_text)
+            if p_str and amt >= UMBRAL_MINIMO_COP:
+                price_stopover_str = f"{p_str} ({amt:,} COP)".replace(",", ".")
+                print(f"[COPA ÉXITO] Tarifa extraída de la página oficial de Copa: {price_stopover_str}")
             else:
-                page.screenshot(path=SCREENSHOT_STOPOVER)
-                p_str, amt = extract_price_from_text(body_text)
-                if p_str:
-                    price_stopover_str = f"{p_str} ({amt:,} COP)".replace(",", ".")
+                match = re.search(r"([\d\.\,]{6,15})\s*COP", body_text)
+                if match:
+                    price_stopover_str = f"{match.group(0)}"
+                    print(f"[COPA ÉXITO REGEX] Tarifa extraída: {price_stopover_str}")
 
         except Exception as e:
             print(f"[ERROR STOPOVER] {e}")
