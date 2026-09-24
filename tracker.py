@@ -233,6 +233,52 @@ def send_telegram_media_group(
             print(f"[TELEGRAM ERROR] {e}")
 
 
+def send_whatsapp_callmebot(
+    price_stopover: str | None,
+    price_google: str | None,
+    warning_message: str | None = None
+) -> None:
+    """Envía un reporte resumido a WhatsApp mediante CallMeBot API."""
+    phone = os.environ.get("WHATSAPP_PHONE")
+    apikey = os.environ.get("WHATSAPP_APIKEY")
+
+    if not phone or not apikey:
+        print("[AVISO] WHATSAPP_PHONE o WHATSAPP_APIKEY no configuradas. Se omite envío a WhatsApp.")
+        return
+
+    timestamp = get_current_colombia_time()
+    tarifa_stopover_str = price_stopover if price_stopover else "Verificando en portal"
+    tarifa_google_str = price_google if price_google else "No detectada"
+
+    message = (
+        f"✈️ *MONITOR DE VUELOS PANAMÁ STOPOVER*\n\n"
+        f"🛫 *Ida:* {ORIGEN_IATA} ➔ {DESTINO_IATA} (08/Nov/2026)\n"
+        f"🇵🇦 *Stopover:* {DESTINO_IATA} ➔ PTY (17/Nov/2026, 3 días)\n"
+        f"🛬 *Regreso Final:* PTY ➔ {ORIGEN_IATA} (20/Nov/2026)\n\n"
+        f"📊 *TARIFAS DETECTADAS:*\n"
+        f"1️⃣ *Portal Stopover / Copa:* {tarifa_stopover_str}\n"
+        f"2️⃣ *Google Flights:* {tarifa_google_str}\n\n"
+        f"💡 *Horarios óptimos Copa:*\n"
+        f"• Regreso Stopover: 01:35 ➔ 06:51 directo\n"
+        f"• Regreso a Cali: 09:20 ➔ 10:57 directo\n"
+        f"🕒 *Fecha:* {timestamp}"
+    )
+
+    encoded_msg = urllib.parse.quote(message)
+    clean_phone = re.sub(r"[^\d]", "", phone)
+    url = f"https://api.callmebot.com/whatsapp.php?phone={clean_phone}&text={encoded_msg}&apikey={apikey}"
+
+    print(f"[WHATSAPP] Enviando reporte a +{clean_phone}...")
+    try:
+        res = requests.get(url, timeout=25)
+        if res.status_code == 200:
+            print("[WHATSAPP] Mensaje enviado exitosamente.")
+        else:
+            print(f"[WHATSAPP ERROR] Código {res.status_code}: {res.text}")
+    except Exception as e:
+        print(f"[WHATSAPP EXCEPCIÓN] {e}")
+
+
 def configure_stealth_context(browser: Browser) -> BrowserContext:
     """Configura un contexto Playwright con evasión anti-bot."""
     context = browser.new_context(
@@ -276,15 +322,11 @@ def run_tracker() -> None:
         page = context.new_page()
         page.set_default_timeout(45000)
 
-        # ---------------------------------------------------------
-        # 1. CONSULTAR GOOGLE FLIGHTS (Captura + Precio Garantizado)
-        # ---------------------------------------------------------
+        # 1. CONSULTAR GOOGLE FLIGHTS
         print("[1/2] Iniciando consulta en Google Flights...")
         price_google_str, _ = consult_google_flights(page)
 
-        # ---------------------------------------------------------
         # 2. CONSULTAR PORTAL OFICIAL PANAMA STOPOVER / COPA
-        # ---------------------------------------------------------
         print("[2/2] Iniciando flujo en portal oficial https://panama-stopover.com/es/...")
         try:
             page.add_init_script("""
@@ -350,23 +392,20 @@ def run_tracker() -> None:
                 page.wait_for_timeout(3000)
 
                 copa_url = page.evaluate("window._openedStopoverUrl")
-            except Exception as we:
+            except Exception:
                 copa_url = None
 
             if not copa_url:
                 copa_url = build_copa_multicity_url()
 
-            # Navegar a Copa
             page.goto(copa_url, referer=URL_INICIAL, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(10000)
 
-            # Tomar la captura del portal oficial
             page.screenshot(path=SCREENSHOT_STOPOVER)
             body_text = page.inner_text("body")
 
             if "Verificación requerida" in body_text or "captcha-delivery" in page.content():
                 print("[INFO] Portal de Copa activó reto antibot en pasarela.")
-                # Extraemos el desglose multiciudad de respaldo
                 bk_price, bk_amt = consult_kayak_bypass(page)
                 if bk_price:
                     price_stopover_str = f"{bk_price} (Copa multiciudad)"
@@ -384,6 +423,13 @@ def run_tracker() -> None:
 
     # Enviar reporte a Telegram con ambas imágenes
     send_telegram_media_group(
+        price_stopover=price_stopover_str,
+        price_google=price_google_str,
+        warning_message=warning_note
+    )
+
+    # Enviar reporte a WhatsApp (CallMeBot) si está configurado
+    send_whatsapp_callmebot(
         price_stopover=price_stopover_str,
         price_google=price_google_str,
         warning_message=warning_note
