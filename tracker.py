@@ -110,7 +110,7 @@ def build_copa_multicity_url() -> str:
         "cabinType": "Y",
         "stopoverType": "arrival",
         "isMiles": "false",
-        "sf": "pa",
+        "sf": "co",
         "langid": "es"
     }
     return f"https://shopping.copaair.com/multicity?{urllib.parse.urlencode(params)}"
