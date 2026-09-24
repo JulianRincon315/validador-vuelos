@@ -2,43 +2,49 @@ name: Panama Stopover Price Monitor
 
 on:
   schedule:
-    # 08:00 AM hora de Colombia (UTC-5) -> 13:00 UTC
-    - cron: '0 13 * * *'
-  workflow_dispatch:
+    # 03:00 AM y 02:00 PM hora de Colombia (UTC-5) -> 08:00 y 19:00 UTC
+    - cron: '0 8,19 * * *'
+  workflow_dispatch: # Permite ejecución manual cuando desees
 
 jobs:
-  check-price:
+  check-flight-prices:
+    name: Consulta y Notificación de Tarifas
     runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
     steps:
-      - name: Checkout del código
+      - name: 1. Checkout del repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Python
+      - name: 2. Configurar Python 3.11 con caché
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Instalar dependencias
+      - name: 3. Instalar librerías del proyecto
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Instalar navegadores de Playwright con dependencias
+      - name: 4. Instalar Chromium y dependencias de Playwright
         run: |
           playwright install --with-deps chromium
 
-      - name: Ejecutar Tracker de Vuelos
+      - name: 5. Ejecutar monitor de vuelos
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python tracker.py
 
-      - name: Guardar captura como artefacto (opcional)
+      - name: 6. Respaldar ambas capturas de pantalla en artefactos
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screenshot-resultado
-          path: copa_resultado.png
+          name: capturas-vuelos-resultado
+          path: |
+            resultadostopover.png
+            resultadogoogleflights.png
+          if-no-files-found: ignore
           retention-days: 7
